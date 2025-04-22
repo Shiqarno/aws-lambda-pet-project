@@ -1,0 +1,5 @@
+# .flake8
+
+[flake8]
+# Maximum allowed line length
+max-line-length = 90
