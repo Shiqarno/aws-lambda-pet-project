@@ -4,12 +4,21 @@ import subprocess
 import tempfile
 import time
 import zipfile
+from typing import Optional
 
 import boto3
 from hydra import compose, initialize
 
+s3 = boto3.client("s3")
 
-def create_s3_bucket_cli(bucket_name, region="us-east-1"):
+
+def create_s3_bucket_cli(bucket_name: str, region: str = "us-east-1") -> None:
+    """Create an S3 bucket using the AWS CLI.
+
+    Args:
+        bucket_name (str): The name of the bucket to create.
+        region (str): The AWS region to create the bucket in.
+    """
     try:
         if region == "us-east-1":
             cmd = ["aws", "s3api", "create-bucket", "--bucket", bucket_name]
@@ -25,34 +34,41 @@ def create_s3_bucket_cli(bucket_name, region="us-east-1"):
                 "--create-bucket-configuration",
                 f"LocationConstraint={region}",
             ]
-
         result = subprocess.run(cmd, capture_output=True, text=True)
-
         if result.returncode == 0:
-            print(f"Bucket '{bucket_name}' created successfully.")
+            print(f"✅ Bucket '{bucket_name}' created successfully.")
         else:
-            print(f"Error creating bucket:\n{result.stderr}")
-
+            print(f"❌ Error creating bucket:\n{result.stderr}")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"❌ Unexpected error: {e}")
 
 
-def create_s3_folder(bucket_name, folder_name):
+def create_s3_folder(bucket_name: str, folder_name: str) -> None:
+    """Create a folder (zero-byte object with '/' suffix) in an S3 bucket.
+
+    Args:
+        bucket_name (str): Name of the bucket.
+        folder_name (str): Folder path inside the bucket.
+    """
     if not folder_name.endswith("/"):
         folder_name += "/"
-
-    s3 = boto3.client("s3")
-
     try:
         s3.put_object(Bucket=bucket_name, Key=folder_name)
-        print(f"Folder '{folder_name}' created in bucket '{bucket_name}'.")
+        print(f"✅ Folder '{folder_name}' created in bucket '{bucket_name}'.")
     except Exception as e:
-        print(f"Error creating folder: {e}")
+        print(f"❌ Error creating folder: {e}")
 
 
-def set_s3_lifecycle_expiration(bucket_name, prefix="archive/", days=1):
-    s3 = boto3.client("s3")
+def set_s3_lifecycle_expiration(
+    bucket_name: str, prefix: str = "archive/", days: int = 1
+) -> None:
+    """Set S3 lifecycle configuration to expire files under a specific prefix.
 
+    Args:
+        bucket_name (str): Name of the S3 bucket.
+        prefix (str): Prefix for files to expire.
+        days (int): Number of days after which files should be deleted.
+    """
     lifecycle_configuration = {
         "Rules": [
             {
@@ -63,7 +79,6 @@ def set_s3_lifecycle_expiration(bucket_name, prefix="archive/", days=1):
             }
         ]
     }
-
     try:
         s3.put_bucket_lifecycle_configuration(
             Bucket=bucket_name, LifecycleConfiguration=lifecycle_configuration
@@ -73,10 +88,16 @@ def set_s3_lifecycle_expiration(bucket_name, prefix="archive/", days=1):
         print(f"❌ Failed to set lifecycle rule: {e}")
 
 
-def create_iam_role_for_lambda_cli(role_name):
-    role_arn = None
+def create_iam_role_for_lambda_cli(role_name: str) -> Optional[str]:
+    """Create an IAM role for AWS Lambda with S3 and CloudWatch access.
 
-    # Define the trust policy
+    Args:
+        role_name (str): Name of the IAM role.
+
+    Returns:
+        Optional[str]: The ARN of the created IAM role, or None on failure.
+    """
+    role_arn = None
     trust_policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -87,16 +108,12 @@ def create_iam_role_for_lambda_cli(role_name):
             }
         ],
     }
-
     try:
-        # Save the trust policy to a temporary JSON file
         with tempfile.NamedTemporaryFile(
             mode="w+", delete=False, suffix=".json"
         ) as tmp_file:
             json.dump(trust_policy, tmp_file)
             tmp_file_path = tmp_file.name
-
-        # Step 1: Create the role
         create_cmd = [
             "aws",
             "iam",
@@ -109,60 +126,70 @@ def create_iam_role_for_lambda_cli(role_name):
             "IAM role for AWS Lambda with S3 and CloudWatch access",
         ]
         result = subprocess.run(create_cmd, capture_output=True, text=True)
-        print(result.stdout if result.returncode == 0 else result.stderr)
-
         response = json.loads(result.stdout)
         role_arn = response["Role"]["Arn"]
-
-        # Step 2: Attach policies to the role
-        policies = [
+        for policy_arn in [
             "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
             "arn:aws:iam::aws:policy/AmazonS3FullAccess",
-        ]
-        for policy_arn in policies:
-            attach_cmd = [
-                "aws",
-                "iam",
-                "attach-role-policy",
-                "--role-name",
-                role_name,
-                "--policy-arn",
-                policy_arn,
-            ]
-            subprocess.run(attach_cmd, capture_output=True, text=True)
-
+        ]:
+            subprocess.run(
+                [
+                    "aws",
+                    "iam",
+                    "attach-role-policy",
+                    "--role-name",
+                    role_name,
+                    "--policy-arn",
+                    policy_arn,
+                ],
+                capture_output=True,
+                text=True,
+            )
         print(f"✅ IAM role '{role_name}' created and policies attached.")
-
     finally:
-        # Clean up the temporary file
         if os.path.exists(tmp_file_path):
             os.remove(tmp_file_path)
-
     return role_arn
 
 
-def zip_lambda_function(source_file, zip_file):
+def zip_lambda_function(source_file: str, zip_file: str) -> None:
+    """Zip the Lambda function source file.
+
+    Args:
+        source_file (str): Path to the Python file to zip.
+        zip_file (str): Output zip file path.
+    """
     with zipfile.ZipFile(zip_file, "w") as z:
         z.write(source_file, arcname=os.path.basename(source_file))
     print(f"✅ '{source_file}' -> '{zip_file}'")
 
 
 def create_lambda_function_from_py(
-    function_name,
-    source_file,
-    role_arn,
-    handler_name="lambda_function.lambda_handler",
-    runtime="python3.13",
-    region="us-east-1",
-):
+    function_name: str,
+    source_file: str,
+    role_arn: str,
+    handler_name: str = "lambda_function.lambda_handler",
+    runtime: str = "python3.13",
+    region: str = "us-east-1",
+) -> Optional[str]:
+    """Create a Lambda function from a Python file.
+
+    Args:
+        function_name (str): Name of the Lambda function.
+        source_file (str): Path to the source Python file.
+        role_arn (str): ARN of the IAM role to assign to the Lambda.
+        handler_name (str): Function handler name.
+        runtime (str): Python runtime version.
+        region (str): AWS region.
+
+    Returns:
+        Optional[str]: ARN of the created Lambda function.
+    """
     zip_file = "function.zip"
     zip_lambda_function(source_file, zip_file)
-
     lambda_client = boto3.client("lambda", region_name=region)
-
     with open(zip_file, "rb") as f:
         zipped_code = f.read()
-
     try:
         response = lambda_client.create_function(
             FunctionName=function_name,
@@ -177,26 +204,54 @@ def create_lambda_function_from_py(
         )
         print(f"✅ Lambda function '{function_name}' created successfully.")
         return response["FunctionArn"]
-
     except lambda_client.exceptions.ResourceConflictException:
         print(f"⚠️ Lambda function '{function_name}' already exists.")
     except Exception as e:
         print(f"❌ Error creating Lambda function: {e}")
-
     if os.path.exists(zip_file):
         os.remove(zip_file)
+    return None
+
+
+def add_pandas_layer_to_lambda(
+    function_name: str, layer_arn: str, region: str = "us-east-1"
+) -> None:
+    """Attach a Pandas layer to an existing Lambda function.
+
+    Args:
+        function_name (str): Name of the Lambda function.
+        layer_arn (str): ARN of the Pandas layer.
+        region (str): AWS region.
+    """
+    lambda_client = boto3.client("lambda", region_name=region)
+    response = lambda_client.get_function_configuration(FunctionName=function_name)
+    existing_layer_arns = [layer["Arn"] for layer in response.get("Layers", [])]
+    updated_layers = existing_layer_arns + [layer_arn]
+    try:
+        lambda_client.update_function_configuration(
+            FunctionName=function_name, Layers=updated_layers
+        )
+        print(f"✅ Layer {layer_arn} has been added to function '{function_name}'.")
+    except Exception as e:
+        print(f"❌ Failed to add layer: {e}")
 
 
 def add_s3_trigger_to_lambda(
-    bucket_name, lambda_function_arn, prefix="", region="us-east-1"
-):
-    s3 = boto3.client("s3")
+    bucket_name: str,
+    lambda_function_arn: str,
+    prefix: str = "",
+    region: str = "us-east-1",
+) -> None:
+    """Add an S3 event trigger to a Lambda function.
+
+    Args:
+        bucket_name (str): Name of the S3 bucket.
+        lambda_function_arn (str): ARN of the Lambda function.
+        prefix (str): Key prefix filter for object-created events.
+        region (str): AWS region.
+    """
     lambda_client = boto3.client("lambda", region_name=region)
-
-    # Extract function name from ARN
     function_name = lambda_function_arn.split(":")[-1]
-
-    # Grant S3 permission to invoke Lambda
     try:
         lambda_client.add_permission(
             FunctionName=function_name,
@@ -208,8 +263,6 @@ def add_s3_trigger_to_lambda(
         print(f"✅ {function_name}: Lambda permission granted to S3.")
     except lambda_client.exceptions.ResourceConflictException:
         print(f"⚠️ {function_name}: Permission already exists (StatementId conflict).")
-
-    # Set the event notification on the bucket
     notification_configuration = {
         "LambdaFunctionConfigurations": [
             {
@@ -223,7 +276,6 @@ def add_s3_trigger_to_lambda(
             }
         ]
     }
-
     try:
         s3.put_bucket_notification_configuration(
             Bucket=bucket_name, NotificationConfiguration=notification_configuration
@@ -234,30 +286,40 @@ def add_s3_trigger_to_lambda(
 
 
 if __name__ == "__main__":
+    # Initialize Hydra configuration
     with initialize(version_base=None, config_path=".", job_name="app"):
-        role_arn = None
-        function_arn = None
         cfg = compose(config_name="env")
+
+        # Step 1: Create S3 resources (bucket and folders)
         create_s3_bucket_cli(cfg.s3.bucket_name, region=cfg.aws.region)
         create_s3_folder(cfg.s3.bucket_name, cfg.s3.incoming_folder)
         create_s3_folder(cfg.s3.bucket_name, cfg.s3.archive_folder)
+
+        # Step 2: Configure lifecycle rule to expire archived files
         set_s3_lifecycle_expiration(cfg.s3.bucket_name, prefix=cfg.s3.archive_folder)
 
+        # Step 3: Create IAM role for Lambda
         role_arn = create_iam_role_for_lambda_cli(cfg.aws.role_name)
-        if role_arn is None:
-            pass  # TODO: error output
-        print(role_arn)
 
+        # Wait a few seconds to ensure the IAM role is fully propagated
         time.sleep(5)
 
+        # Step 4: Deploy Lambda function from source file
         function_arn = create_lambda_function_from_py(
             function_name=cfg.func.name,
             source_file=cfg.func.file_path,
             role_arn=role_arn,
         )
 
+        # Wait a few seconds to ensure the Lambda function is ready
         time.sleep(5)
 
+        # Step 5: Add Pandas layer to Lambda function
+        add_pandas_layer_to_lambda(
+            cfg.func.name, cfg.func.pandas_layer_arn, cfg.aws.region
+        )
+
+        # Step 6: Set up S3 trigger to invoke Lambda on file upload
         add_s3_trigger_to_lambda(
             bucket_name=cfg.s3.bucket_name,
             lambda_function_arn=function_arn,
