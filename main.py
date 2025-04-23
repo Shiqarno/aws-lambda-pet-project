@@ -288,7 +288,7 @@ def add_s3_trigger_to_lambda(
 if __name__ == "__main__":
     # Initialize Hydra configuration
     with initialize(version_base=None, config_path=".", job_name="app"):
-        cfg = compose(config_name="env")
+        cfg = compose(config_name="settings")
 
         # Step 1: Create S3 resources (bucket and folders)
         create_s3_bucket_cli(cfg.s3.bucket_name, region=cfg.aws.region)
