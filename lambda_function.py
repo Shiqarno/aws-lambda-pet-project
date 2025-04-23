@@ -1,4 +1,5 @@
 import io
+import os
 from typing import Any, Dict
 
 import boto3
@@ -8,9 +9,9 @@ import pandas as pd
 s3 = boto3.client("s3")
 
 # Constants for S3 bucket and folder paths
-bucket_name = "aws-lambda-pet-project-bucket"
-incoming_folder = "incoming/"
-archive_folder = "archive/"
+bucket_name = os.getenv("bucket_name", "aws-lambda-pet-project-bucket")
+incoming_folder = os.getenv("incoming_folder", "incoming/")
+archive_folder = os.getenv("archive_folder", "archive/")
 
 
 def s3_file_exist(destination_path: str) -> bool:

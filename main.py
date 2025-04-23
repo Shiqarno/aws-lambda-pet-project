@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import boto3
 from hydra import compose, initialize
@@ -203,6 +203,7 @@ def create_lambda_function_from_py(
             Publish=True,
         )
         print(f"✅ Lambda function '{function_name}' created successfully.")
+        os.remove(zip_file)
         return response["FunctionArn"]
     except lambda_client.exceptions.ResourceConflictException:
         print(f"⚠️ Lambda function '{function_name}' already exists.")
@@ -211,6 +212,42 @@ def create_lambda_function_from_py(
     if os.path.exists(zip_file):
         os.remove(zip_file)
     return None
+
+
+def update_lambda_env_variables(cfg: Dict[str, Any]) -> None:
+    """
+    Update AWS Lambda environment variables for the specified function.
+
+    Args:
+        cfg (Dict[str, Any]): configuration settings.
+
+    Returns:
+        None
+    """
+    lambda_client = boto3.client("lambda", region_name=cfg.aws.region)
+
+    # Define the new environment variables
+    new_env_vars = {
+        "bucket_name": cfg.s3.bucket_name,
+        "incoming_folder": cfg.s3.incoming_folder,
+        "archive_folder": cfg.s3.archive_folder,
+    }
+
+    # Fetch existing environment variables and merge
+    current_config = lambda_client.get_function_configuration(
+        FunctionName=cfg.func.name
+    )
+    existing_vars = current_config.get("Environment", {}).get("Variables", {})
+    existing_vars.update(new_env_vars)
+
+    # Update function configuration
+    try:
+        lambda_client.update_function_configuration(
+            FunctionName=cfg.func.name, Environment={"Variables": existing_vars}
+        )
+        print(f"✅ Environment variables updated for '{cfg.func.name}'.")
+    except Exception as e:
+        print(f"❌ Failed to update environment variables: {e}")
 
 
 def add_pandas_layer_to_lambda(
@@ -312,6 +349,12 @@ if __name__ == "__main__":
         )
 
         # Wait a few seconds to ensure the Lambda function is ready
+        time.sleep(5)
+
+        # Step 4.1: Set environment variables
+        update_lambda_env_variables(cfg)
+
+        # Wait a few seconds more
         time.sleep(5)
 
         # Step 5: Add Pandas layer to Lambda function
